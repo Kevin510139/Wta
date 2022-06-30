@@ -5,12 +5,18 @@ import numpy as np
 import csv
 
 def load():
-    data = np.load("data/0.npy",allow_pickle= True).item()
+    tag =3
+    data = np.load("data/%d.npy",tag,allow_pickle= True).item()
     weapon = data['weapon']['type']
     tar_type = data['target']['type']
     tar_threat = data['target']['threat']
     tar = np.stack((tar_type, tar_threat))
     return tar, weapon
+
+def load_greedy_ans():
+    f = open("data/bruteanswer.txt",'r')
+    data = f.read()
+    return data
 
 def load_sink_data():
     file = open('data/sink.csv')
@@ -28,7 +34,7 @@ def next_max_point(Q_table: np.ndarray, column:int, mask: np.ndarray):
     for i in idx:
         if not (mask[i]):
             continue
-        if Q_table[i,column]> max_v:
+        if Q_table[i,column] > max_v:
             argmax = i
             max_v = Q_table[i,column]
     return argmax, max_v
@@ -40,13 +46,13 @@ def compute_all_tar(Q_table: np.ndarray, weapon: np.ndarray, tar:np.ndarray,sink
     attack_tar = np.zeros((N,))
     new_sink_data = sink_rate(tar,sink_data)
     for i in range(N):
-        current = attack_tar[i]
-        next_tar, _ = next_max_point(Q_table, int(current), mask)
+        next_tar, _ = next_max_point(Q_table, i, mask)
         sink = new_sink_data[next_tar][weapon[i]] -1
         new_sink_data[next_tar][weapon[i]] = sink
         if sink < 0:
             mask[next_tar] = False
         attack_tar[i] = next_tar
+
     return attack_tar
 
 def sink_rate(tar:np.ndarray, sink_data:np.ndarray):
@@ -59,14 +65,22 @@ def sink_rate(tar:np.ndarray, sink_data:np.ndarray):
     return new_sink_data
 
 
-def reward_calculate(tar:np.ndarray,nxt_tar:int,weapon:int,sink:float):
-    if sink < 0:
-        reward = tar[1][nxt_tar]
+def reward_calculate(tar:np.ndarray, nxt_tar:int, weapon:int, sink:np.ndarray, ori_sink:np.ndarray):
+    orig_sink_0 = ori_sink[nxt_tar][0]
+    orig_sink_1 = ori_sink[nxt_tar][1]
+    sink_0 = sink[nxt_tar][0]
+    sink_1 = sink[nxt_tar][1]
+    if weapon == 0:
+        if (orig_sink_1-sink_1)/orig_sink_1 > (orig_sink_0 - sink_0)/orig_sink_0:
+            reward = 0
+        else:
+            reward = 0.5 * (orig_sink_0 - sink_0)/orig_sink_0 * tar[1][nxt_tar]
     else:
-        sink_data = load_sink_data()
-        orig_sink = float(sink_data[int(tar[0][nxt_tar])][weapon])
-        reward = 0.5 * (orig_sink - sink)/orig_sink * tar[1][nxt_tar]
-    return reward
+        if (orig_sink_1-sink_1)/orig_sink_1 < (orig_sink_0 - sink_0)/orig_sink_0:
+            reward = 0
+        else:
+            reward = 0.5 * (orig_sink_1 - sink_1)/orig_sink_1 * tar[1][nxt_tar]
+    return round(reward,3)
 
 def compute_value_of_q_table(Q_table:np.ndarray, tar:np.ndarray, weapon:np.ndarray, sink_data:np.ndarray):
     N = Q_table.shape[1]
@@ -74,24 +88,23 @@ def compute_value_of_q_table(Q_table:np.ndarray, tar:np.ndarray, weapon:np.ndarr
     mask = np.array([True] * M)
     attack_tar = np.zeros((N,))
     new_sink_data = sink_rate(tar,sink_data)
+    orig_sink = new_sink_data.copy()
     for i in range(N):
-        current = attack_tar[i]
-        next_tar, _ = next_max_point(Q_table, int(current), mask)
+        next_tar, _ = next_max_point(Q_table, i, mask)
         sink = new_sink_data[next_tar][weapon[i]] -1
         new_sink_data[next_tar][weapon[i]] = sink
         if sink < 0:
             mask[next_tar] = False
         attack_tar[i] = next_tar
     greedy_value = 0
-    orig_sink = sink_rate(tar,sink_data)
     for i in range(tar.shape[1]):
         if new_sink_data[i][0] < 0 or new_sink_data[i][1] < 0:
             greedy_value += tar[1][i]
-        elif (orig_sink[i][0]-new_sink_data[i][0])/orig_sink[i][0] >= (orig_sink[i][1]-new_sink_data[i][1])/orig_sink[i][1] :
-            greedy_value += 0.5 * (orig_sink[i][0]-new_sink_data[i][0])/orig_sink[i][0] * tar[1][i]
+        elif (orig_sink[i][0]-new_sink_data[i][0])/orig_sink[i][0] > (orig_sink[i][1]-new_sink_data[i][1])/orig_sink[i][1] :
+            greedy_value += 0.5 * (orig_sink[i][0] - new_sink_data[i][0])/orig_sink[i][0] * tar[1][i]
         else:
-            greedy_value += 0.5 * (orig_sink[i][1]-new_sink_data[i][1])/orig_sink[i][1] * tar[1][i]
-    return greedy_value
+            greedy_value += 0.5 * (orig_sink[i][1] - new_sink_data[i][1])/orig_sink[i][1] * tar[1][i]
+    return greedy_value,attack_tar
 
 
 def trace_progress(values: np.ndarray, true_best: float, tag: str):
@@ -103,7 +116,7 @@ def trace_progress(values: np.ndarray, true_best: float, tag: str):
         xmax=len(values),
         colors="r",
         label="Best distance"
-    )
+    ) 
     plt.title(tag)
     plt.legend()
     plt.savefig(f"answer/Evolution_{tag}")
@@ -112,9 +125,10 @@ def write_reult(greedy_tar:np.ndarray, greedy_value: int, Q_table:np.ndarray):
     table =PrettyTable()
     table.field_names = [
         "Weapon to target",
-        "all value"
+        "value"
     ]
     table.add_row([greedy_tar, greedy_value])
+
     with open(f"answer/Results.txt","w") as f:
         f.write(str(table)+'\n')
         f.write(str(Q_table))
